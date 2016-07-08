@@ -2369,8 +2369,18 @@ char * wpa_config_get(struct wpa_ssid *ssid, const char *var)
 
 	for (i = 0; i < NUM_SSID_FIELDS; i++) {
 		const struct parse_data *field = &ssid_fields[i];
-		if (os_strcmp(var, field->name) == 0)
-			return field->writer(field, ssid);
+		if (os_strcmp(var, field->name) == 0) {
+			char *ret = field->writer(field, ssid);
+			if (ret != NULL && (os_strchr(ret, '\r') != NULL ||
+				os_strchr(ret, '\n') != NULL)) {
+				wpa_printf(MSG_ERROR,
+					"Found newline in value for %s; "
+					"not returning it", var);
+				os_free(ret);
+				ret = NULL;
+			}
+			return ret;
+		}
 	}
 
 	return NULL;
@@ -3290,6 +3300,7 @@ struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 	config->wmm_ac_params[3] = ac_vo;
 	config->p2p_search_delay = DEFAULT_P2P_SEARCH_DELAY;
 	config->rand_addr_lifetime = DEFAULT_RAND_ADDR_LIFETIME;
+	config->key_mgmt_offload = DEFAULT_KEY_MGMT_OFFLOAD;
 
 	if (ctrl_interface)
 		config->ctrl_interface = os_strdup(ctrl_interface);
@@ -3915,6 +3926,7 @@ static const struct global_parse_data global_fields[] = {
 	{ INT(mac_addr), 0 },
 	{ INT(rand_addr_lifetime), 0 },
 	{ INT(preassoc_mac_addr), 0 },
+	{ INT(key_mgmt_offload), 0},
 };
 
 #undef FUNC

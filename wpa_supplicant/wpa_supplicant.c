@@ -1906,6 +1906,23 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 			params.psk = ssid->psk;
 	}
 
+	if (wpa_s->conf->key_mgmt_offload) {
+
+		if (params.key_mgmt_suite == WPA_KEY_MGMT_IEEE8021X ||
+		    params.key_mgmt_suite == WPA_KEY_MGMT_IEEE8021X_SHA256)
+			params.req_key_mgmt_offload =
+			  ssid->proactive_key_caching < 0 ? wpa_s->conf->okc :
+			  ssid->proactive_key_caching;
+		else
+			params.req_key_mgmt_offload = 1;
+
+		if (params.key_mgmt_suite == WPA_KEY_MGMT_PSK ||
+		    params.key_mgmt_suite == WPA_KEY_MGMT_PSK_SHA256 ||
+		    params.key_mgmt_suite == WPA_KEY_MGMT_FT_PSK)
+			if (ssid->psk_set)
+				params.psk = ssid->psk;
+	}
+
 	params.drop_unencrypted = use_crypt;
 
 #ifdef CONFIG_IEEE80211W
@@ -2854,12 +2871,14 @@ int wpa_supplicant_driver_init(struct wpa_supplicant *wpa_s)
 			wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
 			interface_count = 0;
 		}
+#ifndef ANDROID
 		if (!wpa_s->p2p_mgmt &&
 		    wpa_supplicant_delayed_sched_scan(wpa_s,
 						      interface_count % 3,
 						      100000))
 			wpa_supplicant_req_scan(wpa_s, interface_count % 3,
 						100000);
+#endif /* ANDROID */
 		interface_count++;
 	} else
 		wpa_supplicant_set_state(wpa_s, WPA_INACTIVE);

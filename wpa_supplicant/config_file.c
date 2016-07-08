@@ -710,6 +710,7 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	INTe(engine);
 	INTe(engine2);
 	INT_DEF(eapol_flags, DEFAULT_EAPOL_FLAGS);
+	INTe(sim_num);
 #endif /* IEEE8021X_EAPOL */
 	for (i = 0; i < 4; i++)
 		write_wep_key(f, i, ssid);
@@ -720,7 +721,6 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	STR(pac_file);
 	INT_DEFe(fragment_size, DEFAULT_FRAGMENT_SIZE);
 	INTe(ocsp);
-	INT_DEFe(sim_num, DEFAULT_USER_SELECTED_SIM);
 #endif /* IEEE8021X_EAPOL */
 	INT(mode);
 	INT(frequency);
@@ -1183,6 +1183,10 @@ static void wpa_config_write_global(FILE *f, struct wpa_config *config)
 	if (config->p2p_search_delay != DEFAULT_P2P_SEARCH_DELAY)
 		fprintf(f, "p2p_search_delay=%u\n",
 			config->p2p_search_delay);
+
+	if (config->key_mgmt_offload)
+		fprintf(f, "key_mgmt_offload=%u\n",
+			config->key_mgmt_offload);
 
 	if (config->mac_addr)
 		fprintf(f, "mac_addr=%d\n", config->mac_addr);

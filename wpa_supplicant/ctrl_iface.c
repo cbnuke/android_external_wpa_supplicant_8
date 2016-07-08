@@ -16,6 +16,9 @@
 #include "common/ieee802_11_common.h"
 #include "common/wpa_ctrl.h"
 #include "eap_peer/eap.h"
+#ifdef CONFIG_EAP_PROXY
+#include "eap_peer/eap_proxy.h"
+#endif
 #include "eapol_supp/eapol_supp_sm.h"
 #include "rsn_supp/wpa.h"
 #include "rsn_supp/preauth.h"
@@ -672,8 +675,23 @@ static int wpa_supplicant_ctrl_iface_wps_pbc(struct wpa_supplicant *wpa_s,
 #ifdef CONFIG_AP
 	u8 *_p2p_dev_addr = NULL;
 #endif /* CONFIG_AP */
+	char *prio = NULL;
+	int priority = 0;
 
-	if (cmd == NULL || os_strcmp(cmd, "any") == 0) {
+	if (cmd) {
+		prio = os_strstr(cmd, "prio=");
+		if (prio) {
+			priority = atoi(prio + 5);
+			wpa_printf(MSG_INFO, "WPS: priority is %d", priority);
+		}
+	}
+
+	/*
+	 * Command is NULL or starts with either "any" or "prio=",
+	 * hence no bssid specified
+	 */
+	if (cmd == NULL || os_strcmp(cmd, "any")
+	   || os_strncmp(cmd, "prio=", 5) == 0) {
 		_bssid = NULL;
 #ifdef CONFIG_P2P
 	} else if (os_strncmp(cmd, "p2p_dev_addr=", 13) == 0) {
@@ -696,7 +714,7 @@ static int wpa_supplicant_ctrl_iface_wps_pbc(struct wpa_supplicant *wpa_s,
 		return wpa_supplicant_ap_wps_pbc(wpa_s, _bssid, _p2p_dev_addr);
 #endif /* CONFIG_AP */
 
-	return wpas_wps_start_pbc(wpa_s, _bssid, 0);
+	return wpas_wps_start_pbc(wpa_s, _bssid, 0, priority);
 }
 
 
@@ -705,8 +723,16 @@ static int wpa_supplicant_ctrl_iface_wps_pin(struct wpa_supplicant *wpa_s,
 					     size_t buflen)
 {
 	u8 bssid[ETH_ALEN], *_bssid = bssid;
-	char *pin;
-	int ret;
+	char *pin, *prio;
+	int ret, priority = 0;
+
+	prio = strstr(cmd, " prio=");
+	if (prio) {
+		*prio = '\0';
+		prio += 6;
+		priority = atoi(prio);
+		wpa_printf(MSG_INFO, "WPS: priority is %d", priority);
+	}
 
 	pin = os_strchr(cmd, ' ');
 	if (pin)
@@ -743,7 +769,7 @@ static int wpa_supplicant_ctrl_iface_wps_pin(struct wpa_supplicant *wpa_s,
 
 	if (pin) {
 		ret = wpas_wps_start_pin(wpa_s, _bssid, pin, 0,
-					 DEV_PW_DEFAULT);
+					 DEV_PW_DEFAULT, priority);
 		if (ret < 0)
 			return -1;
 		ret = os_snprintf(buf, buflen, "%s", pin);
@@ -752,7 +778,8 @@ static int wpa_supplicant_ctrl_iface_wps_pin(struct wpa_supplicant *wpa_s,
 		return ret;
 	}
 
-	ret = wpas_wps_start_pin(wpa_s, _bssid, NULL, 0, DEV_PW_DEFAULT);
+	ret = wpas_wps_start_pin(wpa_s, _bssid, NULL, 0, DEV_PW_DEFAULT,
+				 priority);
 	if (ret < 0)
 		return -1;
 
@@ -817,13 +844,28 @@ static int wpa_supplicant_ctrl_iface_wps_nfc(struct wpa_supplicant *wpa_s,
 {
 	u8 bssid[ETH_ALEN], *_bssid = bssid;
 
-	if (cmd == NULL || cmd[0] == '\0')
+	char *prio = NULL;
+	int priority = 0;
+
+	if (cmd) {
+		prio = os_strstr(cmd, "prio=");
+		if (prio) {
+			priority = atoi(prio + 5);
+			wpa_printf(MSG_INFO, "WPS: priority is %d", priority);
+		}
+	}
+
+	/*
+	 * Command is NULL or starts with either "any" or "prio=",
+	 * hence no bssid specified
+	 */
+	if (cmd == NULL || cmd[0] == '\0' || os_strncmp(cmd, "prio=", 5) == 0)
 		_bssid = NULL;
 	else if (hwaddr_aton(cmd, bssid))
 		return -1;
 
 	return wpas_wps_start_nfc(wpa_s, NULL, _bssid, NULL, 0, 0, NULL, NULL,
-				  0, 0);
+				  0, 0, priority);
 }
 
 
@@ -3378,6 +3420,14 @@ static int ctrl_iface_get_capability_freq(struct wpa_supplicant *wpa_s,
 }
 
 
+#ifdef CONFIG_EAP_PROXY
+static int wpa_supplicant_ctrl_iface_eap_proxy_get_sim_info(
+	char *buf, size_t buf_len)
+{
+	return eap_proxy_get_sim_info(buf, buf_len);
+}
+#endif /* CONFIG_EAP_PROXY */
+
 static int wpa_supplicant_ctrl_iface_get_capability(
 	struct wpa_supplicant *wpa_s, const char *_field, char *buf,
 	size_t buflen)
@@ -5007,6 +5057,7 @@ static void p2p_ctrl_flush(struct wpa_supplicant *wpa_s)
 {
 	os_memset(wpa_s->p2p_auth_invite, 0, ETH_ALEN);
 	wpa_s->force_long_sd = 0;
+	wpas_p2p_stop_find(wpa_s);
 	if (wpa_s->global->p2p)
 		p2p_flush(wpa_s->global->p2p);
 }
@@ -6052,6 +6103,13 @@ static void wpas_ctrl_scan(struct wpa_supplicant *wpa_s, char *params,
 	wpa_s->manual_scan_only_new = 0;
 	wpa_s->scan_id_count = 0;
 
+	if (radio_work_pending(wpa_s, "scan")) {
+		wpa_printf(MSG_DEBUG,
+			   "Pending scan scheduled - reject new request");
+		*reply_len = os_snprintf(reply, reply_size, "FAIL-BUSY\n");
+		return;
+	}
+
 	if (params) {
 		if (os_strncasecmp(params, "TYPE=ONLY", 9) == 0)
 			wpa_s->scan_res_handler = scan_only_handler;
@@ -6916,6 +6974,11 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 		if (wpa_supplicant_ctrl_iface_save_config(wpa_s))
 			reply_len = -1;
 #endif /* CONFIG_NO_CONFIG_WRITE */
+#ifdef CONFIG_EAP_PROXY
+	} else if (os_strcmp (buf, "GET_SIM_INFO") == 0) {
+		reply_len = wpa_supplicant_ctrl_iface_eap_proxy_get_sim_info(
+			reply, reply_size);
+#endif /* CONFIG_EAP_PROXY */
 	} else if (os_strncmp(buf, "GET_CAPABILITY ", 15) == 0) {
 		reply_len = wpa_supplicant_ctrl_iface_get_capability(
 			wpa_s, buf + 15, reply, reply_size);

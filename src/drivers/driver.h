@@ -699,6 +699,14 @@ struct wpa_driver_associate_params {
 	const struct ieee80211_vht_capabilities *vhtcaps;
 	const struct ieee80211_vht_capabilities *vhtcaps_mask;
 #endif /* CONFIG_VHT_OVERRIDES */
+
+	/**
+	 * req_key_mgmt_offload - Request key managment offload for connection
+	 *
+	 * Request key managment offload for this connection if the device
+	 * supports it.
+	 */
+	int req_key_mgmt_offload;
 };
 
 enum hide_ssid {
@@ -1014,13 +1022,17 @@ struct wpa_driver_capa {
 #define WPA_DRIVER_FLAGS_IBSS				0x08000000
 /* Driver supports radar detection */
 #define WPA_DRIVER_FLAGS_RADAR				0x10000000
+/* Driver support ACS offload */
+#define WPA_DRIVER_FLAGS_ACS_OFFLOAD		0x0000000200000000ULL
 /* Driver supports a dedicated interface for P2P Device */
 #define WPA_DRIVER_FLAGS_DEDICATED_P2P_DEVICE		0x20000000
 /* Driver supports QoS Mapping */
 #define WPA_DRIVER_FLAGS_QOS_MAPPING			0x40000000
 /* Driver supports CSA in AP mode */
 #define WPA_DRIVER_FLAGS_AP_CSA				0x80000000
-	unsigned int flags;
+/* Driver supports mesh */
+#define WPA_DRIVER_FLAGS_MESH			0x0000000100000000ULL
+	u64 flags;
 
 	int max_scan_ssids;
 	int max_sched_scan_ssids;
@@ -1058,6 +1070,29 @@ struct wpa_driver_capa {
 	 * Number of supported concurrent channels
 	 */
 	unsigned int num_multichan_concurrent;
+
+	/**
+	 * Supported types of device key management offload
+	 */
+/* WPA/WPA2 PSK key management */
+#define WPA_DRIVER_KEY_MGMT_OFFLOAD_SUPPORT_PSK		0x00000001
+/* 802.11r (FT) PSK key management */
+#define WPA_DRIVER_KEY_MGMT_OFFLOAD_SUPPORT_FT_PSK	0x00000002
+/* Key management on already established PMKSA */
+#define WPA_DRIVER_KEY_MGMT_OFFLOAD_SUPPORT_PMKSA	0x00000004
+/* 802.11r (FT) 802.1X key management */
+#define WPA_DRIVER_KEY_MGMT_OFFLOAD_SUPPORT_FT_802_1X	0x00000008
+	unsigned int key_mgmt_offload_support;
+
+	/**
+	 * Supported types of device key derivation used as
+	 * part of key management offload
+	 */
+/* IGTK key derivation */
+#define WPA_DRIVER_KEY_DERIVE_OFFLOAD_SUPPORT_IGTK	0x00000001
+/* SHA-256 key derivation */
+#define WPA_DRIVER_KEY_DERIVE_OFFLOAD_SUPPORT_SHA256	0x00000002
+	unsigned int key_derive_offload_support;
 
 	/**
 	 * extended_capa - extended capabilities in driver/device
@@ -1318,6 +1353,17 @@ struct macsec_init_params {
 	Boolean use_scb;
 };
 #endif /* CONFIG_MACSEC */
+
+struct drv_acs_params {
+	/* Selected mode (HOSTAPD_MODE_*) */
+	enum hostapd_hw_mode hw_mode;
+
+	/* Indicates whether HT is enabled */
+	int ht_enabled;
+
+	/* Indicates whether HT40 is enabled */
+	int ht40_enabled;
+};
 
 
 /**
@@ -3023,6 +3069,30 @@ struct wpa_driver_ops {
 	 */
 	int (*disable_transmit_sa)(void *priv, u32 channel, u8 an);
 #endif /* CONFIG_MACSEC */
+
+	/**
+	 * key_mgmt_set_pmk - Set PMK for key management offload
+	 * @priv: Private driver interface data
+	 * @pmk: PMK to send to device
+	 * @pmk_len: length of PMK
+	 * Returns: error code
+	 *
+	 * Used to pass the PMK to the device for key management offload.
+	 * This will be used in the case of key management offload on an
+	 * already established PMKSA.
+	 */
+	int (*key_mgmt_set_pmk)(void *priv, const u8 *pmk, size_t pmk_len);
+
+        /**
+	 * do_acs - Automatically select channel
+	 * @priv: Private driver interface data
+	 * @params: Parameters for ACS
+	 * Returns 0 on success, -1 on failure
+	 *
+	 * This command can be used to offload ACS to the driver if the driver
+	 * indicates support for such offloading (WPA_DRIVER_FLAGS_ACS_OFFLOAD).
+	 */
+	int (*do_acs)(void *priv, struct drv_acs_params *params);
 };
 
 
@@ -3498,7 +3568,28 @@ enum wpa_event_type {
 	 * to reduce issues due to interference or internal co-existence
 	 * information in the driver.
 	 */
-	EVENT_AVOID_FREQUENCIES
+	EVENT_AVOID_FREQUENCIES,
+
+	/**
+	 * EVENT_AUTHORIZATION - Device offloaded key management
+	 *
+	 *  Indicates that the device offloaded the establishment of
+	 *  temporal keys for an RSN connection.  This is used as part
+	 *  of key managment offload, where a device operating as a
+	 *  station is capable of doing the exchange necessary to establish
+	 *  temporal keys during initial RSN connection or after roaming.  This
+	 *  event might also be sent after the device handles a PTK rekeying
+	 *  operation.
+	 */
+	EVENT_AUTHORIZATION,
+
+        /**
+	 * EVENT_ACS_CHANNEL_SELECTED - Received selected channels by ACS
+	 *
+	 * Indicates a pair of primary and secondary channels chosen by ACS
+	 * in device.
+	 */
+	EVENT_ACS_CHANNEL_SELECTED
 };
 
 
@@ -4137,6 +4228,36 @@ union wpa_event_data {
 	 * This is used as the data with EVENT_AVOID_FREQUENCIES.
 	 */
 	struct wpa_freq_range_list freq_range;
+
+	/**
+	 * authorization_info - key management offload information
+	 *
+	 * This is the information that is passed from the device
+	 * when an authorization event is signaled which indicates
+	 * that the device offloaded key management.
+	 * @authorized: Status of key management offload, type
+	 *	 nl80211_authorization_status
+	 * @key_replay_ctr: Key replay counter value last used
+	 *	in a valid EAPOL-Key frame
+	 * @ptk_kck: the derived PTK KCK
+	 * @ptk_kek: the derived PTK KEK
+	 */
+	struct authorization_info {
+		u8 authorized;
+		u8 *key_replay_ctr;
+		u8 *ptk_kck;
+		u8 *ptk_kek;
+	} authorization_info;
+
+        /**
+	 * struct acs_selected_channels - Data for EVENT_ACS_CHANNEL_SELECTED
+	 * @pri_channel: Selected primary channel
+	 * @sec_channel: Selected secondary channel
+	 */
+	struct acs_selected_channels {
+		u8 pri_channel;
+		u8 sec_channel;
+	} acs_selected_channels;
 };
 
 /**

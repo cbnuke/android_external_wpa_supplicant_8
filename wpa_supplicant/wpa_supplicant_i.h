@@ -573,7 +573,7 @@ struct wpa_supplicant {
 	int scan_id[MAX_SCAN_ID];
 	unsigned int scan_id_count;
 
-	unsigned int drv_flags;
+	u64 drv_flags;
 	unsigned int drv_enc;
 
 	/*
@@ -755,6 +755,7 @@ struct wpa_supplicant {
 	unsigned int p2p_go_vht:1;
 	unsigned int user_initiated_pd:1;
 	unsigned int p2p_go_group_formation_completed:1;
+	unsigned int group_formation_reported:1;
 	unsigned int waiting_presence_resp;
 	int p2p_first_connection_timeout;
 	unsigned int p2p_nfc_tag_enabled:1;
